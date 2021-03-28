@@ -60,6 +60,7 @@ class ArpPending(object):
     def __str__(self):
         return "Packet to ARP: {} (nexthop: {}, egress: {}, attempts: {} last: {} now: {}".format(str(self.pkt), self.nexthop, self.egress_dev, self.attempts, self.last_update, time.time())
 
+
 class Router(object):
     '''
     A Router takes in packets and sends them out the correct port.
@@ -83,15 +84,25 @@ class Router(object):
                 self.myips.add(ipaddr)
 
         # *** You will need to add more code to this constructor ***
-
+        print("Forwarding table:")
+        self.forwarding_table = self.build_forwarding_table()
         # initialize forwarding table here
 
     #IPv4 address class is NOT part of switchyard!
     #python standard library for IP addresses
 
     # method sig.: layer2_forward(interface, ethernet address, packet, xtype=IP)
-    def layer2_forward_list(self, intf, ethaddr, pkt, xtype=IPv4):
-        pass
+    def layer2_forward(self, intf, ethaddr, pkt, xtype=IPv4):
+
+        # debugger()
+        if str(xtype) == 'EtherType.ARP':
+            pkt.prepend_header(Ethernet())
+            pkt.get_header(Ethernet).dst = pkt.get_header(Arp).targethwaddr
+            pkt.get_header(Ethernet).src = pkt.get_header(Arp).senderhwaddr
+            pkt.get_header(Ethernet).ethertype = EtherType.ARP
+            print(str(pkt))
+
+        self.net.send_packet(intf, pkt) 
 
     def update_arp_table(self, ipaddr, macaddr):
         '''
@@ -120,6 +131,20 @@ class Router(object):
                 self.update_arp_table(arp.sendpkt.payload.protosrc, pkt.payload.hwsrc)
                 self.net.send_packet(dev, arpreply)
 
+    def build_forwarding_table(self):
+        file_contents = self.read_file()
+        forwarding_table = {}
+        for line in file_contents:
+            net_addr = IPv4Network(f'{line[0]}/{line[1]}')
+            forwarding_table[net_addr] = {'nexthop': line[2], 'intf': line[3]}
+        for ipaddr, intf in zip(self.myips, self.interfaces):
+            forwarding_table[ipaddr] = {'nexthop': None, 'intf': intf}
+
+        for entry in forwarding_table:
+            print('{}: {}'.format(entry, forwarding_table[entry]))
+
+        return forwarding_table
+
     def read_file(self):
         with open('forwarding_table.txt', 'r') as f:
             lines = f.read().split('\n')
@@ -140,6 +165,10 @@ class Router(object):
 
             eth = pkt.get_header(Ethernet)
 
+            # if destination is the router, drop
+            # if pkt.get_header(Ethernet).dst in [port.ethaddr for port in self.net.ports()]:
+            #     continue
+
             if eth.ethertype == EtherType.ARP:
                 log_debug("Received ARP packet: {}".format(str(pkt)))
                 arp = pkt.get_header(Arp)
@@ -148,14 +177,31 @@ class Router(object):
             elif eth.ethertype == EtherType.IP:
                 log_debug("Received IP packet: {}".format(str(pkt)))
                 # TODO: process the IP packet and send out the correct interface
+                print("Packet: " + str(pkt))
+                destaddr = pkt.get_header(IPv4).dst
+                matched_addr = None
+                # debugger()
+                for net_addr in self.forwarding_table:
+                    print("ipaddr: " + str(net_addr))
+                    print("destaddr: " + str(destaddr))
+                    nexthop = self.forwarding_table[net_addr]['nexthop']
+                    prefix = IPv4Address(str(net_addr).split('/')[0]) 
+                    destaddr = IPv4Address(destaddr)
+                    matches_net = (int(prefix) & int(destaddr)) == int(prefix)
+                    if nexthop:
+                        nexthop = IPv4Address(nexthop)
+                        matches_nexthop = (int(nexthop) & int(destaddr)) == int(nexthop)
+                    if matches_net or matches_nexthop:
+                        matched_addr = IPv4Address(str(net_addr).split('/')[0])
+                        break
 
-                # To send an ARP request and forward the packet:
-                #   construct a new ArpPending object;
-                #   add it to self.layer2_forward_list;
-                #   call self.process_arp_pending().
-                # arp_pending = ArpPending()
-                # self.layer2_forward_list.append(arp_pending)
-                # self.process_arp_pending()
+                # debugger()
+                if matched_addr:
+                    pkt.get_header(IPv4).ttl -= 1 # decrement time to live of IP header
+                    arp_pending = ArpPending('router-eth2', IPv4Address('172.16.42.2'), pkt)
+                    # arp_pending = ArpPending(matched_addr, destaddr, pkt)
+                    self.layer2_forward_list.append(arp_pending)
+                    self.process_arp_pending()
 
             else:
                 log_warn("Received Non-IP packet that I don't know how to handle: {}".format(str(pkt)))
@@ -191,7 +237,7 @@ class Router(object):
             else:
                 # Not in ARP table, so send ARP request if we haven't timed out.
                 if thisarp.can_try_again(now):
-                    arpreq = self.make_arp_request(self.interfaces[thisarp.egress_dev].ethaddr,                                            _ipv4addr(self.interfaces[thisarp.egress_dev]), thisarp.nexthop)
+                    arpreq = self.make_arp_request(self.interfaces[thisarp.egress_dev].ethaddr, _ipv4addr(self.interfaces[thisarp.egress_dev]), thisarp.nexthop)
                     p = Packet()
                     p += arpreq
                     log_info("ARPing for {} ({})".format(thisarp.nexthop, arpreq))
