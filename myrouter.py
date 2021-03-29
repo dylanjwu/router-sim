@@ -168,9 +168,28 @@ class Router(object):
             file_contents = [line.split(' ') for line in lines]
         return file_contents
     
-    def longest_prefix_match(self, matches):
+    def longest_prefix_match(self, destaddr):
         # TODO: implement this method
-        pass
+        matched_addr = None
+        max_pref_len = sys.maxsize
+        for net_addr in self.forwarding_table:
+            nexthop = self.forwarding_table[net_addr]['nexthop']
+            prefix = IPv4Address(str(net_addr).split('/')[0]) 
+            destaddr = IPv4Address(destaddr)
+            print("destaddr: " + str(destaddr))
+            print("prefix: " + str(prefix))
+            print("nexthop: " + str(nexthop))
+            matches_net = destaddr in IPv4Network(net_addr, False)
+            if nexthop:
+                matches_nexthop = destaddr in IPv4Network(nexthop, False)
+                if matches_nexthop and (abs((int(nexthop)-int(destaddr))) < max_pref_len):
+                    max_pref_len = int(destaddr)-int(nexthop)
+                    matched_addr = nexthop
+
+            if matches_net and (abs((int(prefix)-int(destaddr))) < max_pref_len):
+                max_pref_len = int(destaddr)-int(prefix)
+                matched_addr = IPv4Address(str(net_addr).split('/')[0])
+        return matched_addr
 
     def router_main(self):    
         while True:
@@ -198,37 +217,17 @@ class Router(object):
             elif eth.ethertype == EtherType.IP:
                 log_debug("Received IP packet: {}".format(str(pkt)))
                 # TODO: process the IP packet and send out the correct interface
-                print("Packet: " + str(pkt))
                 destaddr = pkt.get_header(IPv4).dst
-                matched_addr = None
-                max_pref_len = sys.maxsize
-                for net_addr in self.forwarding_table:
-                    nexthop = self.forwarding_table[net_addr]['nexthop']
-                    prefix = IPv4Address(str(net_addr).split('/')[0]) 
-                    destaddr = IPv4Address(destaddr)
-                    print("destaddr: " + str(destaddr))
-                    print("prefix: " + str(prefix))
-                    print("nexthop: " + str(nexthop))
-                    matches_net = destaddr in IPv4Network(net_addr, False)
-                    if nexthop:
-                        matches_nexthop = destaddr in IPv4Network(nexthop, False)
-                        if matches_nexthop and (abs((int(nexthop)-int(destaddr))) < max_pref_len):
-                            max_pref_len = int(destaddr)-int(nexthop)
-                            matched_addr = nexthop
-
-                    if matches_net and (abs((int(prefix)-int(destaddr))) < max_pref_len):
-                        max_pref_len = int(destaddr)-int(prefix)
-                        matched_addr = IPv4Address(str(net_addr).split('/')[0])
-
-                print("MATCHED_ADDR: " + str(matched_addr))
+                matched_addr = self.longest_prefix_match(destaddr)
                 if matched_addr:
                     pkt.get_header(IPv4).ttl -= 1 # decrement time to live of IP header
-                    #TODO: CHANGE LINE BELOW; currently hardcoded, need to implement longest_prefix_match()
+
                     port = 'router-eth0'
                     for key in self.forwarding_table.keys():
                         entry = self.forwarding_table[key]
                         if key == matched_addr or entry['nexthop'] == matched_addr:
                             port = entry['intf']
+
                     print("curr_ip: {} {}".format(matched_addr, port))
                     arp_pending = ArpPending(port, matched_addr, pkt)
                     # arp_pending = ArpPending(matched_addr, destaddr, pkt)
