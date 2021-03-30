@@ -5,6 +5,16 @@ Basic IPv4 router template (static routing) in Python, with ARP implemented.
 
 Carleton CS 331, Fall 2020
 Whitman CS 301, Fall 2021
+
+
+Extended by Team Packet Droppers (Dylan Wu, Ronan Byrne, Jeremy Davis, Charlie Zeigler)
+Completed on March 30, 2021
+
+Resources used:
+    - pdb (https://docs.python.org/3/library/pdb.html)
+    - Switchyard (https://jsommers.github.io/switchyard/writing_a_program.html)
+    - ipaddress (https://docs.python.org/3/library/pdb.html
+    - and of course the project description tips and questions/answers
 '''
 
 import sys
