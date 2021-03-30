@@ -171,25 +171,32 @@ class Router(object):
     def longest_prefix_match(self, destaddr):
         # TODO: implement this method
         matched_addr = None
+        matched_intf = None
         max_pref_len = sys.maxsize
+        destaddr = IPv4Address(destaddr)
+
+        def more_specific(nexthop):
+            return (abs((int(nexthop)-int(destaddr))) < max_pref_len)
+
         for net_addr in self.forwarding_table:
             nexthop = self.forwarding_table[net_addr]['nexthop']
-            prefix = IPv4Address(str(net_addr).split('/')[0]) 
-            destaddr = IPv4Address(destaddr)
-            print("destaddr: " + str(destaddr))
-            print("prefix: " + str(prefix))
-            print("nexthop: " + str(nexthop))
+            intf = self.forwarding_table[net_addr]['intf']
+
             matches_net = destaddr in IPv4Network(net_addr, False)
             if nexthop:
                 matches_nexthop = destaddr in IPv4Network(nexthop, False)
-                if matches_nexthop and (abs((int(nexthop)-int(destaddr))) < max_pref_len):
+                if matches_nexthop and more_specific(nexthop):
                     max_pref_len = int(destaddr)-int(nexthop)
                     matched_addr = nexthop
+                    matched_intf = intf
+            else:
+                prefix = IPv4Address(str(net_addr).split('/')[0]) 
+                if matches_net and more_specific(prefix):
+                    max_pref_len = int(destaddr)-int(prefix)
+                    matched_addr = IPv4Address(str(net_addr).split('/')[0])
+                    matched_intf = intf
 
-            if matches_net and (abs((int(prefix)-int(destaddr))) < max_pref_len):
-                max_pref_len = int(destaddr)-int(prefix)
-                matched_addr = IPv4Address(str(net_addr).split('/')[0])
-        return matched_addr
+        return (matched_addr, matched_intf)
 
     def router_main(self):    
         while True:
@@ -205,6 +212,7 @@ class Router(object):
 
             eth = pkt.get_header(Ethernet)
 
+            # TODO: drop packets addressed to router itself 
             # if destination is the router, drop
             # if pkt.get_header(Ethernet).dst in [port.ethaddr for port in self.net.ports()]:
             #     continue
@@ -218,18 +226,10 @@ class Router(object):
                 log_debug("Received IP packet: {}".format(str(pkt)))
                 # TODO: process the IP packet and send out the correct interface
                 destaddr = pkt.get_header(IPv4).dst
-                matched_addr = self.longest_prefix_match(destaddr)
+                matched_addr, matched_intf = self.longest_prefix_match(destaddr)
                 if matched_addr:
                     pkt.get_header(IPv4).ttl -= 1 # decrement time to live of IP header
-
-                    port = 'router-eth0'
-                    for key in self.forwarding_table.keys():
-                        entry = self.forwarding_table[key]
-                        if key == matched_addr or entry['nexthop'] == matched_addr:
-                            port = entry['intf']
-
-                    print("curr_ip: {} {}".format(matched_addr, port))
-                    arp_pending = ArpPending(port, matched_addr, pkt)
+                    arp_pending = ArpPending(matched_intf, destaddr, pkt)
                     # arp_pending = ArpPending(matched_addr, destaddr, pkt)
                     self.layer2_forward_list.append(arp_pending)
                     self.process_arp_pending()
