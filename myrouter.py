@@ -11,9 +11,10 @@ Extended by Team Packet Droppers (Dylan Wu, Ronan Byrne, Jeremy Davis, Charlie Z
 Completed on March 30, 2021
 
 Resources used:
-    - pdb (https://docs.python.org/3/library/pdb.html)
+    - how to use pdb (https://docs.python.org/3/library/pdb.html)
     - Switchyard (https://jsommers.github.io/switchyard/writing_a_program.html)
     - ipaddress (https://docs.python.org/3/library/pdb.html
+    - how ARP works ("Computer Networks: A Sytems Approach" by Peterson and Davie)
     - and of course the project description tips and questions/answers
 '''
 
@@ -87,6 +88,7 @@ class Router(object):
 
         self.forwarding_table = {}
         self.build_forwarding_table()
+        self.print_forwarding_table()
 
         for intf in net.interfaces():
             self.interfaces[intf.name] = intf
@@ -123,8 +125,13 @@ class Router(object):
                 self.net.send_packet(dev, arpreply)
 
     """ Start of methods we implemented """
-    def layer2_forward(self, intf, ethaddr, pkt, xtype=IPv4):
 
+    def layer2_forward(self, intf, ethaddr, pkt, xtype=IPv4):
+        '''
+        Adds source and address fields to the ethernet header, depending on
+        whether the packet is of type ARP or IPv4, and then sends the packet out the given
+        interface
+        '''
         if xtype == EtherType.ARP:
             pkt.prepend_header(Ethernet())
             pkt.get_header(Ethernet).dst = pkt.get_header(Arp).targethwaddr
@@ -147,6 +154,7 @@ class Router(object):
             for ipaddr in intf.ipaddrs:
                 self.forwarding_table[ipaddr] = {'nexthop': None, 'intf': intf.name}
 
+    def print_forwarding_table(self):
         log_info("FORWARDING TABLE")
         for entry in self.forwarding_table:
             log_info('{}: {}'.format(entry, self.forwarding_table[entry]))
@@ -158,11 +166,17 @@ class Router(object):
         return file_contents
     
     def longest_prefix_match(self, destaddr):
+        ''''
+        Takes the destination address of the received packet,
+        and returns a tuple of the interface of the most specific 
+        IP address (that includes destaddr within its network), and the
+        next hop (if applicable)
+        '''
         result = (None, None)
         max_pref_len = sys.maxsize
         destaddr = IPv4Address(destaddr)
 
-        def is_longer(nexthop):
+        def is_more_specific(nexthop):
             return (abs((int(nexthop)-int(destaddr))) < max_pref_len)
 
         for net_addr in self.forwarding_table:
@@ -170,24 +184,28 @@ class Router(object):
             intf = self.forwarding_table[net_addr]['intf']
 
             matches_nexthop = nexthop and destaddr in IPv4Network(nexthop, False)
-            if matches_nexthop and is_longer(nexthop):
+            if matches_nexthop and is_more_specific(nexthop):
                 max_pref_len = int(destaddr)-int(nexthop)
                 result = (nexthop, intf)
 
             matches_net = destaddr in IPv4Network(net_addr, False)
             prefix = IPv4Address(str(net_addr).split('/')[0]) 
-            if matches_net and is_longer(prefix):
+            if matches_net and is_more_specific(prefix):
                 max_pref_len = int(destaddr)-int(prefix)
                 result = (nexthop, intf)
 
         return result
 
     def process_pkt(self, pkt):
+        '''
+        Processes a recieved IP packet by finding the corresponding interface
+        and next hop (if they exist) and then adding the packet as an ArpPending object
+        '''
         destaddr = pkt.get_header(IPv4).dst
         nexthop, matched_intf = self.longest_prefix_match(destaddr)
         if matched_intf:
             log_info("Match found, adding packet to forward list")
-            pkt.get_header(IPv4).ttl -= 1 # decrement time to live of IP header
+            pkt.get_header(IPv4).ttl -= 1 # decrement time-to-live of IP header
             if not nexthop:
                 nexthop = destaddr
             arp_pending = ArpPending(matched_intf, nexthop, pkt)
